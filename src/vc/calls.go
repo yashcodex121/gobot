@@ -111,59 +111,60 @@ func dlProgressBar(filled int) string {
 		fmt.Sprintf(" %d%%", filled*10)
 }
 
-// sendDlPhotoMsg sends the downloading card for playSong: a photo (thumbnail)
-// with a caption showing song info + progress bar + Cancel button.
-// Falls back to a plain text message when no thumbnail is available or the
-// photo send fails.
-func sendDlPhotoMsg(bot *td.Client, chatID int64, song *utils.CachedTrack) (*td.Message, error) {
+// buildDlRichText builds the Rich HTML for the downloading card, embedding
+// the thumbnail via <img> if available (mirrors the /start screen pattern).
+func buildDlRichText(song *utils.CachedTrack) string {
 	escName := html.EscapeString(song.Name)
 	escChannel := html.EscapeString(song.Channel)
 	dur := utils.SecToMin(song.Duration)
+	bar := dlProgressBar(3)
 
-	var caption string
+	var body string
 	if escChannel != "" {
-		caption = fmt.Sprintf(
+		body = fmt.Sprintf(
 			"<tg-emoji emoji-id=\"5346422717948716483\">⬇️</tg-emoji> <b>Downloading</b>\n\n"+
 				"<tg-emoji emoji-id=\"5893297890117292323\">🔤</tg-emoji> <b>%s</b>\n"+
 				"<tg-emoji emoji-id=\"5292226786229236118\">👤</tg-emoji> %s  •  <tg-emoji emoji-id=\"5893149782465057649\">⏱</tg-emoji> %s\n\n"+
 				"%s",
-			escName, escChannel, dur, dlProgressBar(3),
+			escName, escChannel, dur, bar,
 		)
 	} else {
-		caption = fmt.Sprintf(
+		body = fmt.Sprintf(
 			"<tg-emoji emoji-id=\"5346422717948716483\">⬇️</tg-emoji> <b>Downloading</b>\n\n"+
 				"<tg-emoji emoji-id=\"5893297890117292323\">🔤</tg-emoji> <b>%s</b>\n"+
 				"<tg-emoji emoji-id=\"5893149782465057649\">⏱</tg-emoji> %s\n\n"+
 				"%s",
-			escName, dur, dlProgressBar(3),
+			escName, dur, bar,
 		)
 	}
 
-	cancelKeyboard := core.CancelDownloadKeyboard()
-
 	if song.Thumbnail != "" {
-		formattedCaption, err := bot.GetFormattedText(caption, nil, "HTML")
-		if err == nil {
-			photoMsg, err := bot.SendMessage(chatID, &td.InputMessagePhoto{
-				Photo: &td.InputPhoto{
-					Photo: td.InputFileRemote{Id: song.Thumbnail},
-				},
-				Caption: formattedCaption,
-			}, &td.SendMessageOpts{ReplyMarkup: cancelKeyboard})
-			if err == nil {
-				return photoMsg, nil
-			}
-		}
+		body = fmt.Sprintf("<img src=\"%s\"/>\n\n", song.Thumbnail) + body
 	}
+	return body
+}
 
-	// Fallback: plain text message.
-	return bot.SendTextMessage(chatID, fmt.Sprintf("⬇️ Downloading: %s", song.Name), &td.SendTextMessageOpts{
-		ReplyMarkup: cancelKeyboard,
+// sendDlPhotoMsg sends the downloading card (Rich Message with embedded
+// thumbnail via <img> + progress bar + Cancel button).
+func sendDlPhotoMsg(bot *td.Client, chatID int64, song *utils.CachedTrack) (*td.Message, error) {
+	body := buildDlRichText(song)
+	richMsg := &td.InputRichMessage{
+		DetectAutomaticBlocks: true,
+		Source:                td.RichMessageSourceHtml{Text: strings.ReplaceAll(body, "\n", "<br>\n")},
+	}
+	msg, err := bot.SendRichMessage(chatID, richMsg, &td.SendTextMessageOpts{
+		ReplyMarkup: core.CancelDownloadKeyboard(),
 	})
+	if err != nil {
+		// Fallback: plain text.
+		return bot.SendTextMessage(chatID, fmt.Sprintf("⬇️ Downloading: %s", song.Name), &td.SendTextMessageOpts{
+			ReplyMarkup: core.CancelDownloadKeyboard(),
+		})
+	}
+	return msg, nil
 }
 
 // editDlMsgToNowPlaying converts the downloading card to the Now Playing card.
-// Handles both photo (edits caption) and text (edits text) messages.
 func editDlMsgToNowPlaying(bot *td.Client, msg *td.Message, song *utils.CachedTrack) {
 	escURL := html.EscapeString(song.URL)
 	escName := html.EscapeString(song.Name)
@@ -190,24 +191,15 @@ func editDlMsgToNowPlaying(bot *td.Client, msg *td.Message, song *utils.CachedTr
 		)
 	}
 
-	if _, isPhoto := msg.Content.(*td.MessagePhoto); isPhoto {
-		formattedText, err := bot.GetFormattedText(nowPlaying, nil, "HTML")
-		if err == nil {
-			_, err = msg.EditCaption(bot, formattedText, &td.EditCaptionOpts{
-				ReplyMarkup: core.ControlButtons("play"),
-			})
-			if err == nil {
-				return
-			}
-		}
+	if song.Thumbnail != "" {
+		nowPlaying = fmt.Sprintf("<img src=\"%s\"/>\n\n", song.Thumbnail) + nowPlaying
 	}
 
-	// Fallback: edit as plain HTML text.
-	_, _ = msg.EditText(bot, nowPlaying, &td.EditTextMessageOpts{
-		ReplyMarkup:           core.ControlButtons("play"),
-		ParseMode:             "HTML",
-		DisableWebPagePreview: true,
-	})
+	richMsg := &td.InputRichMessage{
+		DetectAutomaticBlocks: true,
+		Source:                td.RichMessageSourceHtml{Text: strings.ReplaceAll(nowPlaying, "\n", "<br>\n")},
+	}
+	_, _ = msg.EditContent(bot, &td.InputMessageRichMessage{Message: richMsg}, core.ControlButtons("play"))
 }
 
 // playSong downloads and plays a single song. It sends a downloading card

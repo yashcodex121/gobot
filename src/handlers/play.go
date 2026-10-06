@@ -39,71 +39,77 @@ func downloadingBar(filled int) string {
 	return fmt.Sprintf("%s %d%%", bar, filled*10)
 }
 
-// sendDownloadingPhoto deletes the placeholder text message (updater) and
-// sends a new photo message that shows the song's thumbnail, a progress bar,
-// and a Cancel button. It returns the new *td.Message so callers can later
-// edit it into the "Now Playing" card.
-//
-// If thumbnail is empty or the photo send fails, the original updater
-// message is edited to a plain "Downloading…" text instead and returned as-is.
+// sendDownloadingPhoto deletes the "Searching…" placeholder and sends a Rich
+// Message that embeds the song thumbnail (via <img>) alongside the title,
+// channel, duration, progress bar, and a Cancel button.
+// Using a Rich Message mirrors the pattern already used by the /start screen
+// and avoids having to download the thumbnail URL to a local file first.
 func sendDownloadingPhoto(c *td.Client, chatId int64, updater *td.Message, song utils.MusicTrack) *td.Message {
-	// Delete the "Searching and downloading..." placeholder.
+	// Delete the "Searching and downloading..." placeholder first.
 	_ = c.DeleteMessages(chatId, []int64{updater.Id}, &td.DeleteMessagesOpts{Revoke: true})
 
 	escName := html.EscapeString(song.Title)
 	escChannel := html.EscapeString(song.Channel)
 	dur := utils.SecToMin(song.Duration)
+	bar := downloadingBar(3)
 
-	caption := fmt.Sprintf(
-		"<tg-emoji emoji-id=\"5346422717948716483\">⬇️</tg-emoji> <b>Downloading</b>\n\n"+
-			"<tg-emoji emoji-id=\"5893297890117292323\">🔤</tg-emoji> <b>%s</b>\n"+
-			"<tg-emoji emoji-id=\"5893149782465057649\">⏱</tg-emoji> %s\n\n"+
-			"%s",
-		escName, dur, downloadingBar(3),
-	)
-	if escChannel != "" {
-		caption = fmt.Sprintf(
-			"<tg-emoji emoji-id=\"5346422717948716483\">⬇️</tg-emoji> <b>Downloading</b>\n\n"+
-				"<tg-emoji emoji-id=\"5893297890117292323\">🔤</tg-emoji> <b>%s</b>\n"+
-				"<tg-emoji emoji-id=\"5292226786229236118\">👤</tg-emoji> %s  •  <tg-emoji emoji-id=\"5893149782465057649\">⏱</tg-emoji> %s\n\n"+
-				"%s",
-			escName, escChannel, dur, downloadingBar(3),
-		)
-	}
-
-	formattedCaption, err := c.GetFormattedText(caption, nil, "HTML")
-	if err != nil {
-		// Fallback: send plain text downloading message.
-		msg, _ := c.SendTextMessage(chatId, fmt.Sprintf("⬇️ Downloading: %s", song.Title), &td.SendTextMessageOpts{
-			ReplyMarkup: core.CancelDownloadKeyboard(),
-		})
-		return msg
-	}
-
+	var body string
 	if song.Thumbnail != "" {
-		photoMsg, err := c.SendMessage(chatId, &td.InputMessagePhoto{
-			Photo: &td.InputPhoto{
-				Photo: td.InputFileRemote{Id: song.Thumbnail},
-			},
-			Caption:          formattedCaption,
-			ShowCaptionAbove: false,
-		}, &td.SendMessageOpts{
-			ReplyMarkup: core.CancelDownloadKeyboard(),
-		})
-		if err == nil {
-			return photoMsg
+		// <img> is supported in Rich Message text (same pattern as /start screen).
+		if escChannel != "" {
+			body = fmt.Sprintf(
+				"<img src=\"%s\"/>\n\n"+
+					"<tg-emoji emoji-id=\"5346422717948716483\">⬇️</tg-emoji> <b>Downloading</b>\n\n"+
+					"<tg-emoji emoji-id=\"5893297890117292323\">🔤</tg-emoji> <b>%s</b>\n"+
+					"<tg-emoji emoji-id=\"5292226786229236118\">👤</tg-emoji> %s  •  <tg-emoji emoji-id=\"5893149782465057649\">⏱</tg-emoji> %s\n\n"+
+					"%s",
+				song.Thumbnail, escName, escChannel, dur, bar,
+			)
+		} else {
+			body = fmt.Sprintf(
+				"<img src=\"%s\"/>\n\n"+
+					"<tg-emoji emoji-id=\"5346422717948716483\">⬇️</tg-emoji> <b>Downloading</b>\n\n"+
+					"<tg-emoji emoji-id=\"5893297890117292323\">🔤</tg-emoji> <b>%s</b>\n"+
+					"<tg-emoji emoji-id=\"5893149782465057649\">⏱</tg-emoji> %s\n\n"+
+					"%s",
+				song.Thumbnail, escName, dur, bar,
+			)
+		}
+	} else {
+		// No thumbnail — plain Rich Message without image.
+		if escChannel != "" {
+			body = fmt.Sprintf(
+				"<tg-emoji emoji-id=\"5346422717948716483\">⬇️</tg-emoji> <b>Downloading</b>\n\n"+
+					"<tg-emoji emoji-id=\"5893297890117292323\">🔤</tg-emoji> <b>%s</b>\n"+
+					"<tg-emoji emoji-id=\"5292226786229236118\">👤</tg-emoji> %s  •  <tg-emoji emoji-id=\"5893149782465057649\">⏱</tg-emoji> %s\n\n"+
+					"%s",
+				escName, escChannel, dur, bar,
+			)
+		} else {
+			body = fmt.Sprintf(
+				"<tg-emoji emoji-id=\"5346422717948716483\">⬇️</tg-emoji> <b>Downloading</b>\n\n"+
+					"<tg-emoji emoji-id=\"5893297890117292323\">🔤</tg-emoji> <b>%s</b>\n"+
+					"<tg-emoji emoji-id=\"5893149782465057649\">⏱</tg-emoji> %s\n\n"+
+					"%s",
+				escName, dur, bar,
+			)
 		}
 	}
 
-	// Fallback: plain text if no thumbnail or photo send failed.
-	msg, _ := c.SendTextMessage(chatId, fmt.Sprintf("⬇️ Downloading: %s", song.Title), &td.SendTextMessageOpts{
+	msg, err := c.SendRichMessage(chatId, richHTML(body), &td.SendTextMessageOpts{
 		ReplyMarkup: core.CancelDownloadKeyboard(),
 	})
+	if err != nil {
+		// Fallback: plain text.
+		msg, _ = c.SendTextMessage(chatId, fmt.Sprintf("⬇️ Downloading: %s", song.Title), &td.SendTextMessageOpts{
+			ReplyMarkup: core.CancelDownloadKeyboard(),
+		})
+	}
 	return msg
 }
 
-// editToNowPlaying edits the downloading message (photo or text) to the
-// final "Started streaming" card with playback control buttons.
+// editToNowPlaying edits the downloading Rich Message to the final
+// "Started streaming" card with playback control buttons.
 func editToNowPlaying(c *td.Client, msg *td.Message, song utils.CachedTrack) (*td.Message, error) {
 	escURL := html.EscapeString(song.URL)
 	escName := html.EscapeString(song.Name)
@@ -130,22 +136,12 @@ func editToNowPlaying(c *td.Client, msg *td.Message, song utils.CachedTrack) (*t
 		)
 	}
 
-	// For a photo message, edit its caption.
-	if _, isPhoto := msg.Content.(*td.MessagePhoto); isPhoto {
-		formattedText, err := c.GetFormattedText(nowPlaying, nil, "HTML")
-		if err == nil {
-			return msg.EditCaption(c, formattedText, &td.EditCaptionOpts{
-				ReplyMarkup: core.ControlButtons("play"),
-			})
-		}
+	// Keep the thumbnail in the Now Playing card too if available.
+	if song.Thumbnail != "" {
+		nowPlaying = fmt.Sprintf("<img src=\"%s\"/>\n\n", song.Thumbnail) + nowPlaying
 	}
 
-	// For text / rich messages, edit the text normally.
-	return msg.EditText(c, nowPlaying, &td.EditTextMessageOpts{
-		ParseMode:             "HTML",
-		ReplyMarkup:           core.ControlButtons("play"),
-		DisableWebPagePreview: true,
-	})
+	return editRich(c, msg, nowPlaying, core.ControlButtons("play"))
 }
 
 // playHandler handles the /play command.

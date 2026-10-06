@@ -1,0 +1,34 @@
+/.idea
+*.db
+*.dat
+.env
+/downloads
+/cache
+app
+/src/cookies
+
+ntgcalls.h
+libntgcalls.a
+libntgcalls.so
+libtdjson.so.*
+libtdjson.so
+
+# Runtime data
+/database/
+*.session
+*.session-journal
+*.session-shm
+*.session-wal
+*.mp3
+*.binlog
+
+# Local backups
+*.before-smart
+*.before-smart-final
+*.before-smart-final2
+.env.backup*
+
+# Build output
+youtubetunes
+
+*.session
